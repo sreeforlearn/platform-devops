@@ -92,7 +92,7 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: >
             -Dsonar.python.coverage.reportPaths=coverage.xml
@@ -143,9 +143,19 @@ jobs:
       - name: Install Snyk CLI
         run: npm install -g snyk@1.1295.1
 
+      - name: Validate SNYK_TOKEN
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          echo "token length: ${#SNYK_TOKEN}"
+          if [[ "$SNYK_TOKEN" =~ [[:space:]] ]]; then
+            echo "::warning::SNYK_TOKEN contains whitespace/newline characters — re-save the secret cleanly (expected length: 36)"
+          fi
+
       - name: Run Snyk vulnerability scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
+          export SNYK_TOKEN="${SNYK_TOKEN//[[:space:]]/}"
           snyk test --file=requirements.txt --package-manager=pip \
             --severity-threshold=high --exit-code=1
