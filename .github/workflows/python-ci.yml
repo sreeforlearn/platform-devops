@@ -126,18 +126,10 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - name: Install Snyk CLI
-        run: |
-          curl --fail --show-error --silent --location \
-            https://static.snyk.io/cli/latest/snyk-linux \
-            --output snyk
-          chmod +x snyk
-          sudo mv snyk /usr/local/bin/snyk
-
-      - name: Verify Snyk CLI
-        run: snyk --version
-
       - name: Snyk dependency scan
+        uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk test --file=requirements.txt --package-manager=pip --severity-threshold=high --exit-code=1
+        with:
+          command: test
+          args: --file=requirements.txt --severity-threshold=high --exit-code=1
