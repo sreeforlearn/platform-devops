@@ -1,18 +1,40 @@
+
 name: Reusable - Python CI
 
 on:
   workflow_call:
+    secrets:
+      SONAR_TOKEN:
+        required: true
+      SONAR_HOST_URL:
+        required: true
+      SNYK_TOKEN:
+        required: true
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+      JFROG_URL:
+        required: true
+      JFROG_USERNAME:
+        required: true
+      JFROG_ACCESS_TOKEN:
+        required: true
+      JFROG_REPO:
+        required: true
 
 permissions:
   contents: read
 
 jobs:
+  # 1. Unit tests and coverage
   test:
     name: Unit tests and coverage
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
-      - name: Checkout caller repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -25,11 +47,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest pytest-cov
 
-      - name: Run tests
-        run: python -m pytest -v --junitxml=junit.xml --cov=app --cov-report=xml:coverage.xml --cov-report=term-missing
+      - name: Run unit tests and coverage
+        run: |
+          python -m pytest -v \
+            --junitxml=junit.xml \
+            --cov=app \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing
 
-      - name: Upload test and coverage reports
+      - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -39,28 +67,190 @@ jobs:
             coverage.xml
           if-no-files-found: warn
           retention-days: 14
+
+  # 2. SonarQube analysis and Quality Gate
   sonar:
     name: SonarQube analysis
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # full history — better analysis
+          fetch-depth: 0
 
       - name: Download test reports
         uses: actions/download-artifact@v4
         with:
-          name: python-test-reports   # junit.xml + coverage.xml vastayi
+          name: python-test-reports
+          path: .
 
-      - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@v6
+      - name: SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      - name: Quality Gate check
-        uses: sonarsource/sonarqube-quality-gate-action@master
+      - name: Enforce Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  # 3. Security scanning
+  security:
+    name: Gitleaks, Trivy and Snyk
+    needs: sonar
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout full Git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+
+      - name: Set up Snyk CLI
+        uses: snyk/actions/setup@master
+
+      - name: Snyk dependency scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk test \
+            --file=requirements.txt \
+            --package-manager=pip \
+            --severity-threshold=high
+
+  # 4. Build and scan Docker image
+  image:
+    name: Build and scan Docker image
+    needs: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    permissions:
+      contents: read
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: meta
+        shell: bash
+        run: |
+          echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag "${{ secrets.DOCKERHUB_USERNAME }}/releaselab-py:${GITHUB_SHA}" \
+            .
+
+      - name: Trivy image vulnerability scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/releaselab-py:${{ github.sha }}
+          scan-type: image
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+
+      - name: Save image for publishing job
+        run: |
+          docker save \
+            "${{ secrets.DOCKERHUB_USERNAME }}/releaselab-py:${GITHUB_SHA}" \
+            -o releaselab-image.tar
+
+      - name: Upload scanned image
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanned-docker-image
+          path: releaselab-image.tar
+          retention-days: 1
+
+  # 5. Publish Docker image and JFrog artifact
+  publish:
+    name: Publish to Docker Hub and JFrog
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download scanned image
+        uses: actions/download-artifact@v4
+        with:
+          name: scanned-docker-image
+          path: .
+
+      - name: Load scanned image
+        run: docker load -i releaselab-image.tar
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push scanned image to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ needs.image.outputs.image_tag }}
+        run: |
+          docker push "${DOCKERHUB_USERNAME}/releaselab-py:${IMAGE_TAG}"
+
+      - name: Create source artifact
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=.venv \
+            --exclude=.scannerwork \
+            --exclude=__pycache__ \
+            --exclude=.pytest_cache \
+            -czf releaselab-py-source.tar.gz .
+
+      - name: Upload artifact to JFrog
+        env:
+          JFROG_URL: ${{ secrets.JFROG_URL }}
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+          JFROG_REPO: ${{ secrets.JFROG_REPO }}
+          IMAGE_TAG: ${{ needs.image.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          BASE_URL="${JFROG_URL%/}"
+          TARGET="${BASE_URL}/artifactory/${JFROG_REPO}/releaselab-py/${IMAGE_TAG}/releaselab-py-source.tar.gz"
+
+          curl --fail --show-error --silent \
+            --user "${JFROG_USERNAME}:${JFROG_ACCESS_TOKEN}" \
+            --upload-file releaselab-py-source.tar.gz \
+            "$TARGET"
