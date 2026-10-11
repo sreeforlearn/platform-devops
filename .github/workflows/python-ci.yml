@@ -126,7 +126,6 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-
       - name: Install Snyk CLI
         run: |
           curl --fail --show-error --silent --location \
@@ -137,11 +136,6 @@ jobs:
 
       - name: Verify Snyk CLI
         run: snyk --version
-
-      - name: Verify Snyk authentication
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk auth "$SNYK_TOKEN"
 
       - name: Snyk dependency scan
         env:
