@@ -39,3 +39,28 @@ jobs:
             coverage.xml
           if-no-files-found: warn
           retention-days: 14
+  sonar:
+    name: SonarQube analysis
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history — better analysis
+
+      - name: Download test reports
+        uses: actions/download-artifact@v4
+        with:
+          name: python-test-reports   # junit.xml + coverage.xml vastayi
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Quality Gate check
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
