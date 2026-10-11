@@ -140,8 +140,4 @@ jobs:
       - name: Snyk dependency scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-          snyk test \
-            --file=requirements.txt \
-            --package-manager=pip \
-            --severity-threshold=high
+        run: snyk test --file=requirements.txt --package-manager=pip --severity-threshold=high --exit-code=1
