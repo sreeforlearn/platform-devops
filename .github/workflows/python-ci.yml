@@ -134,7 +134,6 @@ jobs:
         run: snyk auth $SNYK_TOKEN  # Explicitly authenticate before scan
 
       - name: Run Snyk vulnerability scan
-        continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk test --maven-aggregate-project --sarif-file-output=snyk.sarif --severity-threshold=high
+        run: snyk test --file=requirements.txt --package-manager=pip --severity-threshold=high --exit-code=1
