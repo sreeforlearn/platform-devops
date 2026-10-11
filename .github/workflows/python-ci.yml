@@ -138,4 +138,3 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: snyk test --maven-aggregate-project --sarif-file-output=snyk.sarif --severity-threshold=high
-        working-directory: springboot-demo
